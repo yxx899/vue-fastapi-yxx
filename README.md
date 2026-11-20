@@ -88,3 +88,38 @@ cd backend
 ```bash
 python scripts/init_demo_tenant.py --reset-password
 ```
+
+## 生产部署（GitHub Actions）
+
+推送到 `main` 或在 Actions 里手动运行 **Deploy to Aliyun**，会在 GitHub 上构建前端，再同步到服务器、安装后端依赖并重启服务（适合 1GB 轻量机，避免在服务器上跑 `npm`）。**不会覆盖**服务器上的 `backend/data` 与 `backend/.env`。
+
+### 一次性准备
+
+1. 本机生成部署专用 SSH 密钥（勿提交到仓库）：
+
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/kb_deploy_ed25519 -C "github-actions-kb-deploy"
+```
+
+2. 把**公钥**写入服务器 `~/.ssh/authorized_keys`（可用 `tools/setup_deploy_ssh.py`）。
+
+3. 在 GitHub 仓库 **Settings → Secrets and variables → Actions** 添加：
+
+| Secret | 示例 |
+|--------|------|
+| `DEPLOY_HOST` | `47.95.28.202` |
+| `DEPLOY_USER` | `root` |
+| `DEPLOY_SSH_KEY` | 私钥全文（`kb_deploy_ed25519` 文件内容） |
+| `DEPLOY_PATH` | `/opt/kb`（可选，默认 `/opt/kb`） |
+| `DEPLOY_PORT` | `22`（可选） |
+
+4. 服务器上保留好 `backend/.env`（通义密钥等），勿提交到 Git。
+
+### 本机手动触发远端构建
+
+SSH 登录服务器后：
+
+```bash
+export DEPLOY_PATH=/opt/kb
+bash /opt/kb/scripts/remote_deploy.sh
+```

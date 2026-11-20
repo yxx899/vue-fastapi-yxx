@@ -1,0 +1,98 @@
+name: Deploy to Aliyun
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+      DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate secrets
+        run: |
+          test -n "$DEPLOY_HOST" || (echo "Missing secret DEPLOY_HOST" && exit 1)
+          test -n "$DEPLOY_USER" || (echo "Missing secret DEPLOY_USER" && exit 1)
+          test -n "${{ secrets.DEPLOY_SSH_KEY }}" || (echo "Missing secret DEPLOY_SSH_KEY" && exit 1)
+          echo "DEPLOY_PATH=${DEPLOY_PATH:-/opt/kb}" >> "$GITHUB_ENV"
+          echo "DEPLOY_PORT=${DEPLOY_PORT:-22}" >> "$GITHUB_ENV"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+          test -f dist/index.html
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${DEPLOY_PORT:-22}" -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+          echo "SSH_CMD=ssh -i ~/.ssh/deploy_key -p ${DEPLOY_PORT:-22} -o StrictHostKeyChecking=yes" >> "$GITHUB_ENV"
+
+      - name: Sync code to server
+        run: |
+          set -euo pipefail
+          RSYNC_SSH="ssh -i ~/.ssh/deploy_key -p ${DEPLOY_PORT} -o StrictHostKeyChecking=yes"
+          REMOTE="${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}"
+          $SSH_CMD "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p ${DEPLOY_PATH}/backend ${DEPLOY_PATH}/frontend/dist ${DEPLOY_PATH}/scripts"
+          # 后端：排除 data/.env/venv，避免覆盖生产数据与密钥
+          rsync -az --delete \
+            --exclude '.venv/' \
+            --exclude 'data/' \
+            --exclude '.env' \
+            --exclude '.env.local' \
+            --exclude '__pycache__/' \
+            --exclude '*.pyc' \
+            -e "$RSYNC_SSH" \
+            backend/ "${REMOTE}/backend/"
+          # 前端：只同步已构建的 dist（不在 1GB 服务器上跑 npm）
+          rsync -az --delete \
+            -e "$RSYNC_SSH" \
+            frontend/dist/ "${REMOTE}/frontend/dist/"
+          rsync -az --delete \
+            -e "$RSYNC_SSH" \
+            scripts/ "${REMOTE}/scripts/"
+          rsync -az \
+            -e "$RSYNC_SSH" \
+            docker-compose.yml README.md "${REMOTE}/"
+
+      - name: Remote install and restart
+        run: |
+          set -euo pipefail
+          $SSH_CMD "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "export DEPLOY_PATH='${DEPLOY_PATH}' && chmod +x '${DEPLOY_PATH}/scripts/remote_deploy.sh' && bash '${DEPLOY_PATH}/scripts/remote_deploy.sh'"
+
+      - name: Health check
+        run: |
+          set -euo pipefail
+          for i in 1 2 3 4 5 6 7 8; do
+            if curl -sfS "http://${DEPLOY_HOST}/api/health"; then
+              echo
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "Health check failed"
+          exit 1
