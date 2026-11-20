@@ -2,7 +2,7 @@
   <div class="auth-page auth-page--tenant">
     <aside class="auth-hero">
       <span class="auth-hero__badge">Tenant</span>
-      <h1 class="auth-hero__title">把文档变成可检索、可问答的知识</h1>
+      <h1 class="auth-hero__title">把文档变成可检索、可问答的知识aaaaa</h1>
       <p class="auth-hero__desc">
         上传手册与资料，按权限共享；成员在统一入口提问，回答带来源引用。
       </p>
